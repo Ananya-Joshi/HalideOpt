@@ -11,6 +11,7 @@
 
 using namespace Halide;
 using namespace Halide::Tools;
+using namespace std::chrono;
 
 Target find_gpu_target() {
     // Start with a target suitable for the machine you're running this on.
@@ -140,8 +141,6 @@ void test_performance(Buffer<uint8_t> input, Func lin) {
     
     lin.realize(output);
 
-    using namespace std::chrono;
-
     double best_time = 0.0;
     for (int i = 0; i < 3; i++) {
         high_resolution_clock::time_point t1 = high_resolution_clock::now();
@@ -165,10 +164,12 @@ int main(int argc, char **argv) {
     Buffer<uint8_t> input = load_image("images/rgb.png");
 
     LinearizeMaskPipeline lmp(input);
+    lmp.schedule_for_gpu();
     printf("Mask pipeline:\n");
     test_performance(input, lmp.lin);
 
     LinearizeBranchPipeline lbp(input);
+    lbp.schedule_for_gpu();
     printf("Branch pipeline:\n");
     test_performance(input, lbp.lin);
 }
