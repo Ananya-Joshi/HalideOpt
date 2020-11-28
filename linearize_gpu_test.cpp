@@ -1,4 +1,4 @@
-// g++ linearize_gpu_test.cpp -g -I ~/Halide10/include/ -I ~/Halide10/share/Halide/tools/ -L ~/Halide10/lib/ -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o linearize_gpu_test -std=c++11
+// g++ linearize_gpu_test.cpp -g -I ~/Halide10/include/ -I ~/Halide10/share/Halide/tools/ -L ~/Halide10/lib/ -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o linearize_gpu_test -std=c++11 --cudart shared
 // LD_LIBRARY_PATH=~/Halide10/lib/ ./linearize_gpu_test
 
 
@@ -30,7 +30,7 @@ Target find_gpu_target() {
         // CUDA would also be a fine choice on machines with NVidia GPUs.
         features_to_try.push_back(Target::Metal);
     } else {
-        features_to_try.push_back(Target::OpenCL);
+        features_to_try.push_back(Target::CUDA);
     }
     // Uncomment the following lines to also try CUDA:
     // features_to_try.push_back(Target::CUDA);
@@ -99,20 +99,16 @@ public:
     LinearizeBranchPipeline(Buffer<uint8_t> in) : input(in) {
         
         Expr value = input(x, y, c);
-        lin(x, y, c) = value; // just to initalize lin
-        Expr ovalue = lin(x, y, c);
 
         Expr threshold = 0.0404482f;
 
         // Cast it to a floating point value.
         value = cast<float>(value);
-        ovalue = cast<float>(ovalue);
 
         value = value / 255.0f;
 
         // linearize
-        ovalue = select(value <= threshold, value / 12.92f, ovalue);
-        ovalue = select(value > threshold, pow((value + 0.055f) / 1.055f, 2.4f), ovalue);
+        Expr ovalue = select(value <= threshold, value / 12.92f, pow((value + 0.055f) / 1.055f, 2.4f));
         
 
         ovalue = ovalue * 255.0f;
@@ -163,13 +159,23 @@ void test_performance(Buffer<uint8_t> input, Func lin) {
 int main(int argc, char **argv) {
     Buffer<uint8_t> input = load_image("images/rgb.png");
 
-    LinearizeMaskPipeline lmp(input);
-    lmp.schedule_for_gpu();
-    printf("Mask pipeline:\n");
-    test_performance(input, lmp.lin);
+    printf("CPU:\n");
+    LinearizeBranchPipeline cpu_lbp(input);
+    printf("Branch pipeline avg runtime (3000x):\n");
+    test_performance(input, cpu_lbp.lin);
 
-    LinearizeBranchPipeline lbp(input);
-    lbp.schedule_for_gpu();
-    printf("Branch pipeline:\n");
-    test_performance(input, lbp.lin);
+    LinearizeMaskPipeline cpu_lmp(input);
+    printf("Branch-free pipeline avg runtime (3000x):\n");
+    test_performance(input, cpu_lmp.lin);
+
+    printf("\nGPU:\n");
+    LinearizeBranchPipeline gpu_lbp(input);
+    gpu_lbp.schedule_for_gpu();
+    printf("Branch pipeline avg runtime (3000x):\n");
+    test_performance(input, gpu_lbp.lin);
+    
+    LinearizeMaskPipeline gpu_lmp(input);
+    gpu_lmp.schedule_for_gpu();
+    printf("Branch-free pipeline avg runtime (3000x):\n");
+    test_performance(input, gpu_lmp.lin);
 }
