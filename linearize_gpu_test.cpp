@@ -8,6 +8,13 @@
 
 // Include some support code for loading pngs.
 #include "halide_image_io.h"
+#include <filesystem>
+#include <string>
+#include <iostream>
+
+
+namespace fs = std::__fs::filesystem;
+
 
 using namespace Halide;
 using namespace Halide::Tools;
@@ -153,29 +160,37 @@ void test_performance(Buffer<uint8_t> input, Func lin) {
         }
     }
 
-    printf("%1.4f seconds\n", best_time);
+    printf("%1.8f seconds\n", best_time);
 }
 
 int main(int argc, char **argv) {
-    Buffer<uint8_t> input = load_image("images/rgb.png");
+    std::string path = "tiny-imagenet-200/";
 
-    printf("CPU:\n");
-    LinearizeBranchPipeline cpu_lbp(input);
-    printf("Branch pipeline avg runtime (3000x):\n");
-    test_performance(input, cpu_lbp.lin);
+    for (const auto & entry : fs::recursive_directory_iterator(path)){
+        std::string path_string{entry.path().u8string()};
+        std::string s2 ("JPEG");
+        if (path_string.find(s2) != std::string::npos){
+            std::cout << path_string;
+            Buffer<uint8_t> input = load_image(path_string);
+            printf("CPU:\n");
+            LinearizeBranchPipeline cpu_lbp(input);
+            printf("Branch pipeline avg runtime (3000x):\n");
+            test_performance(input, cpu_lbp.lin);
 
-    LinearizeMaskPipeline cpu_lmp(input);
-    printf("Branch-free pipeline avg runtime (3000x):\n");
-    test_performance(input, cpu_lmp.lin);
+            LinearizeMaskPipeline cpu_lmp(input);
+            printf("Branch-free pipeline avg runtime (3000x):\n");
+            test_performance(input, cpu_lmp.lin);
 
-    printf("\nGPU:\n");
-    LinearizeBranchPipeline gpu_lbp(input);
-    gpu_lbp.schedule_for_gpu();
-    printf("Branch pipeline avg runtime (3000x):\n");
-    test_performance(input, gpu_lbp.lin);
-    
-    LinearizeMaskPipeline gpu_lmp(input);
-    gpu_lmp.schedule_for_gpu();
-    printf("Branch-free pipeline avg runtime (3000x):\n");
-    test_performance(input, gpu_lmp.lin);
+            printf("\nGPU:\n");
+            LinearizeBranchPipeline gpu_lbp(input);
+            gpu_lbp.schedule_for_gpu();
+            printf("Branch pipeline avg runtime (3000x):\n");
+            test_performance(input, gpu_lbp.lin);
+            
+            LinearizeMaskPipeline gpu_lmp(input);
+            gpu_lmp.schedule_for_gpu();
+            printf("Branch-free pipeline avg runtime (3000x):\n");
+            test_performance(input, gpu_lmp.lin);
+        }
+    }
 }
