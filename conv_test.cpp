@@ -197,7 +197,7 @@ void test_performance(Buffer<uint8_t> input, Func lin, std::string oname) {
     printf("N: %d\n", n);
 
     if (oname != "") {
-        std::ofstream outFile(oname + ".txt");
+        std::ofstream outFile(oname + "_conv.txt");
         // the important part
         for (const auto &e : v) outFile << e << "\n";
     }
