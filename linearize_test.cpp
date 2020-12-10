@@ -1,6 +1,8 @@
-// g++ linearize_gpu_test.cpp -g -I ~/Halide10/include/ -I ~/Halide10/share/Halide/tools/ -L ~/Halide10/lib/ -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o linearize_gpu_test -std=c++11
-// LD_LIBRARY_PATH=~/Halide10/lib/ ./linearize_gpu_test
+// g++ linearize_test.cpp -g -I ~/arch/Halide/distrib/include/ -I ~/arch/Halide/distrib/tools/ -L ~/arch/Halide/distrib/lib/ -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o linearize_test -std=c++11
+// LD_LIBRARY_PATH=~/arch/Halide/distrib/lib/ ./linearize_test images/rgb.png
 
+// g++ linearize_test.cpp -g -I ~/Halide10/include/ -I ~/Halide10/share/Halide/tools/ -L ~/Halide10/lib/ -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o linearize_test -std=c++11
+// LD_LIBRARY_PATH=~/Halide10/lib/ ./linearize_test images/rgb.png
 
 #include "Halide.h"
 
@@ -9,6 +11,13 @@
 
 // Include some support code for loading pngs.
 #include "halide_image_io.h"
+// #include <filesystem>
+#include <string>
+#include <iostream>
+
+
+// namespace fs = std::__fs::filesystem;
+
 
 using namespace Halide;
 using namespace Halide::Tools;
@@ -56,7 +65,7 @@ public:
         Func mask, less, greater;
         Expr value = input(x, y, c);
 
-        Expr threshold = 0.0404482f;
+        Expr threshold = 0.5f; //0.0404482f;
 
         // Cast it to a floating point value.
         value = cast<float>(value);
@@ -64,11 +73,11 @@ public:
         value = value / 255.0f;
 
         // linearize
-        //mask(x, y, c) = select(value <= threshold, 0, 1);
+        mask(x, y, c) = cast<float>(value > threshold);//select(value <= threshold, 0, 1);
         less(x, y, c) = value / 12.92f;
         greater(x, y, c) = pow((value + 0.055f) / 1.055f, 2.4f);
 
-        value = select(value <= threshold, less(x, y, c), greater(x, y, c));
+        value = mask(x, y, c) * greater(x, y, c) + (1.0f - mask(x, y, c)) * less(x, y, c);//select(value <= threshold, less(x, y, c), greater(x, y, c));
         
 
         value = value * 255.0f;
@@ -77,6 +86,14 @@ public:
         value = cast<uint8_t>(value);
 
         lin(x, y, c) = value;
+    }
+
+    bool schedule_for_cpu() {
+        // lin.reorder(c, x, y)
+        //     .bound(c, 0, 3)
+        //     .unroll(c);
+        // Var x_outer, x_inner, y_outer, y_inner;
+        // lin.tile(x, y, x_outer, y_outer, x_inner, y_inner, 4, 4);
     }
 
     bool schedule_for_gpu() {
@@ -101,7 +118,7 @@ public:
         
         Expr value = input(x, y, c);
 
-        Expr threshold = 0.0404482f;
+        Expr threshold = 0.5f; //0.0404482f;
 
         // Cast it to a floating point value.
         value = cast<float>(value);
@@ -118,6 +135,14 @@ public:
         ovalue = cast<uint8_t>(ovalue);
 
         lin(x, y, c) = ovalue;
+    }
+
+    bool schedule_for_cpu() {
+        // lin.reorder(c, x, y)
+        //     .bound(c, 0, 3)
+        //     .unroll(c);
+        // Var x_outer, x_inner, y_outer, y_inner;
+        // lin.tile(x, y, x_outer, y_outer, x_inner, y_inner, 4, 4);
     }
 
     bool schedule_for_gpu() {
@@ -138,9 +163,17 @@ public:
 #include <string>
 void test_performance(Buffer<uint8_t> input, Func lin, std::string oname) {
     Buffer<uint8_t> output(input.width(), input.height(), input.channels());
-    
-    int n = 1000;
     lin.realize(output);
+    output.copy_to_host();
+    save_image(output, oname + "_linearize.png");
+    //lin.compile_to_lowered_stmt(oname + "_linearize.html", lin.infer_arguments(), HTML);
+    
+    // warmup
+    int n = 1000;
+    for (int i = 0; i < n; i++) {
+        lin.realize(output);
+        output.copy_to_host();
+    }
     std::vector<double> v;
     for (int i = 0; i < n; i++) {
         high_resolution_clock::time_point t1 = high_resolution_clock::now();
@@ -150,7 +183,6 @@ void test_performance(Buffer<uint8_t> input, Func lin, std::string oname) {
 
         duration<double> time_span = duration_cast<duration<double>>(t2 - t1);
         double avg_time = time_span.count();
-
         v.push_back(avg_time);
     }
     double sum = std::accumulate(v.begin(), v.end(), 0.0);
@@ -162,31 +194,71 @@ void test_performance(Buffer<uint8_t> input, Func lin, std::string oname) {
     printf("Std dev: %1.6f seconds\n", stdev);
     printf("N: %d\n", n);
 
-    std::ofstream outFile(oname);
-    // the important part
-    for (const auto &e : v) outFile << e << "\n";
+    if (oname != "") {
+        std::ofstream outFile(oname + ".txt");
+        // the important part
+        for (const auto &e : v) outFile << e << "\n";
+    }
 }
 
+void test_performance(Buffer<uint8_t> input, Func lin) {
+    test_performance(input, lin, "");
+}
+
+
 int main(int argc, char **argv) {
-    Buffer<uint8_t> input = load_image("images/rgb.png");
+    if (argc > 1) {
+        Buffer<uint8_t> input = load_image(argv[1]);
+        printf("CPU:\n");
+        LinearizeBranchPipeline cpu_lbp(input);
+        cpu_lbp.schedule_for_cpu();
+        printf("Branch pipeline avg runtime (1000x):\n");
+        test_performance(input, cpu_lbp.lin, "renders/cpu_branch");
 
-    printf("CPU:\n");
-    LinearizeBranchPipeline cpu_lbp(input);
-    printf("Branch pipeline avg runtime (3000x):\n");
-    test_performance(input, cpu_lbp.lin, "cpu_branch.txt");
+        LinearizeMaskPipeline cpu_lmp(input);
+        cpu_lmp.schedule_for_cpu();
+        printf("Branch-free pipeline avg runtime (1000x):\n");
+        test_performance(input, cpu_lmp.lin, "renders/cpu_pred");
 
-    LinearizeMaskPipeline cpu_lmp(input);
-    printf("Branch-free pipeline avg runtime (3000x):\n");
-    test_performance(input, cpu_lmp.lin, "cpu_pred.txt");
+        printf("\nGPU:\n");
+        LinearizeBranchPipeline gpu_lbp(input);
+        gpu_lbp.schedule_for_gpu();
+        printf("Branch pipeline avg runtime (1000x):\n");
+        test_performance(input, gpu_lbp.lin, "renders/gpu_branch");
 
-    printf("\nGPU:\n");
-    LinearizeBranchPipeline gpu_lbp(input);
-    gpu_lbp.schedule_for_gpu();
-    printf("Branch pipeline avg runtime (3000x):\n");
-    test_performance(input, gpu_lbp.lin, "gpu_branch.txt");
-    
-    LinearizeMaskPipeline gpu_lmp(input);
-    gpu_lmp.schedule_for_gpu();
-    printf("Branch-free pipeline avg runtime (3000x):\n");
-    test_performance(input, gpu_lmp.lin, "gpu_pred.txt");
+        LinearizeMaskPipeline gpu_lmp(input);
+        gpu_lmp.schedule_for_gpu();
+        printf("Branch-free pipeline avg runtime (1000x):\n");
+        test_performance(input, gpu_lmp.lin, "renders/gpu_pred");
+    }
+
+    // std::string path = "tiny-imagenet-200/";
+
+    // for (const auto & entry : fs::recursive_directory_iterator(path)){
+    //     std::string path_string{entry.path().u8string()};
+    //     std::string s2 ("JPEG");
+    //     if (path_string.find(s2) != std::string::npos){
+    //         std::cout << path_string;
+    //         Buffer<uint8_t> input = load_image(path_string);
+    //         printf("CPU:\n");
+    //         LinearizeBranchPipeline cpu_lbp(input);
+    //         printf("Branch pipeline avg runtime (3000x):\n");
+    //         test_performance(input, cpu_lbp.lin);
+
+    //         LinearizeMaskPipeline cpu_lmp(input);
+    //         printf("Branch-free pipeline avg runtime (3000x):\n");
+    //         test_performance(input, cpu_lmp.lin);
+
+    //         printf("\nGPU:\n");
+    //         LinearizeBranchPipeline gpu_lbp(input);
+    //         gpu_lbp.schedule_for_gpu();
+    //         printf("Branch pipeline avg runtime (3000x):\n");
+    //         test_performance(input, gpu_lbp.lin);
+            
+    //         LinearizeMaskPipeline gpu_lmp(input);
+    //         gpu_lmp.schedule_for_gpu();
+    //         printf("Branch-free pipeline avg runtime (3000x):\n");
+    //         test_performance(input, gpu_lmp.lin);
+    //     }
+    // }
 }
