@@ -75,12 +75,12 @@ public:
         Func inpb = BoundaryConditions::repeat_edge(input);
 
         mask(x, y, c) = cast<float>(value > threshold);//select(value <= threshold, 0, 1);
-        less(x, y, c) = inpb(x, y, c)
+        less(x, y, c) = 0.2f * (inpb(x, y, c)
                      + inpb(x, y - 1, c)
                      + inpb(x, y + 1, c)
                      + inpb(x - 1, y, c)
-                     + inpb(x + 1, y, c);
-        greater(x, y, c) = 4 * inpb(x, y, c)
+                     + inpb(x + 1, y, c));
+        greater(x, y, c) = 4.0f * inpb(x, y, c)
                      - inpb(x, y - 1, c)
                      - inpb(x, y + 1, c)
                      - inpb(x - 1, y, c)
@@ -103,8 +103,16 @@ public:
             return false;
         }
 
-        Var x_outer, x_inner, y_outer, y_inner;
-        lin.gpu_tile(x, y, x_outer, y_outer, x_inner, y_inner, 8, 8);
+        Var x0, y0, x1, y1, x2, y2, x3, y3;
+        lin.split(x, x3, x2, 8);
+        lin.split(x3, x0, x1, 8);
+        lin.split(y, y3, y2, 8);
+        lin.split(y3, y0, y1, 8);
+        lin.reorder(x2, y2, x1, y1, x0, y0);
+        lin.gpu_blocks(x0, y0);
+        lin.gpu_threads(x1, y1);
+
+        //lin.gpu_tile(x, y, x_outer, y_outer, x_inner, y_inner, 8, 8);
 
         lin.compile_jit(target);
     }
@@ -128,11 +136,11 @@ public:
 
         Func inpb = BoundaryConditions::repeat_edge(input);
 
-        lin(x, y, c) = cast<uint8_t>(min(select(value <= threshold, inpb(x, y, c)
+        lin(x, y, c) = cast<uint8_t>(min(select(value <= threshold, 0.2f * (inpb(x, y, c)
                      + inpb(x, y - 1, c)
                      + inpb(x, y + 1, c)
                      + inpb(x - 1, y, c)
-                     + inpb(x + 1, y, c), 4 * inpb(x, y, c)
+                     + inpb(x + 1, y, c)), 4.0f * inpb(x, y, c)
                      - inpb(x, y - 1, c)
                      - inpb(x, y + 1, c)
                      - inpb(x - 1, y, c)
@@ -153,8 +161,16 @@ public:
             return false;
         }
 
-        Var x_outer, x_inner, y_outer, y_inner;
-        lin.gpu_tile(x, y, x_outer, y_outer, x_inner, y_inner, 8, 8);
+        Var x0, y0, x1, y1, x2, y2, x3, y3;
+        lin.split(x, x3, x2, 8);
+        lin.split(x3, x0, x1, 8);
+        lin.split(y, y3, y2, 8);
+        lin.split(y3, y0, y1, 8);
+        lin.reorder(x2, y2, x1, y1, x0, y0);
+        lin.gpu_blocks(x0, y0);
+        lin.gpu_threads(x1, y1);
+
+        //lin.gpu_tile(x, y, x_outer, y_outer, x_inner, y_inner, 8, 8);
 
         lin.compile_jit(target);
     }
